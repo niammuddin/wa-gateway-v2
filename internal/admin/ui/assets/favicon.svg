@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">WA Gateway</title>
+  <rect width="64" height="64" rx="16" fill="#16824b"/>
+  <path d="M19 18.5h26a6.5 6.5 0 0 1 6.5 6.5v15A6.5 6.5 0 0 1 45 46.5H30L18 53V25a6.5 6.5 0 0 1 6.5-6.5Z" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M27 29h17M27 37h11" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,16 @@
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+auth_sessions/
+*.log
+logs/
+tmp/
+coverage/
+bin/
+dist/
+build/
+.idea/
+.vscode/
+.DS_Store

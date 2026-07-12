@@ -1,0 +1,3 @@
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS url text;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS filename text;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS mime_type text;

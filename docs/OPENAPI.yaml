@@ -1,0 +1,137 @@
+openapi: 3.0.3
+info:
+  title: WA Gateway Go API
+  version: 1.0.0
+servers:
+  - url: /
+components:
+  securitySchemes:
+    bearerAuth: {type: http, scheme: bearer}
+    apiKey: {type: apiKey, in: header, name: X-Api-Key}
+  schemas:
+    Error:
+      type: object
+      properties:
+        statusCode: {type: integer}
+        error: {type: string}
+        message: {type: string}
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: {type: string}
+        password: {type: string, format: password}
+    TokenResponse:
+      type: object
+      properties:
+        accessToken: {type: string}
+        refreshToken: {type: string}
+        expiresIn: {type: integer}
+    Session:
+      type: object
+      properties:
+        session_id: {type: string}
+        status: {type: string}
+        method: {type: string, enum: [qr, pairing]}
+        phone_number: {type: string}
+        qr_code: {type: string}
+        pairing_code: {type: string}
+        wa_jid: {type: string}
+    CreateSessionRequest:
+      type: object
+      required: [sessionId]
+      properties:
+        sessionId: {type: string}
+        method: {type: string, enum: [qr, pairing], default: qr}
+        phoneNumber: {type: string}
+    SendMessageRequest:
+      type: object
+      required: [sessionId, to, type]
+      properties:
+        sessionId: {type: string}
+        to: {type: string}
+        type: {type: string, enum: [text, image, document, pdf]}
+        message: {type: string}
+        url: {type: string, format: uri}
+        filename: {type: string}
+        mimeType: {type: string}
+        templateId: {type: string, format: uuid}
+        variables: {type: object, additionalProperties: {type: string}}
+        referenceId: {type: string, maxLength: 255}
+        priority: {type: integer, default: 0}
+        delay: {type: integer, minimum: 0, description: Delay in milliseconds}
+    QueuedMessage:
+      type: object
+      properties:
+        messageId: {type: string}
+        jobId: {type: string}
+        status: {type: string, enum: [queued, sent, delivered, read, failed]}
+        message: {type: string}
+    WebhookRequest:
+      type: object
+      required: [url, events]
+      properties:
+        url: {type: string, format: uri}
+        events: {type: array, items: {type: string}}
+        sessionIds: {type: array, items: {type: string}}
+        secret: {type: string}
+        isActive: {type: boolean, default: true}
+    ThrottleRequest:
+      type: object
+      properties:
+        minIntervalMs: {type: integer, minimum: 0}
+        jitterMs: {type: integer, minimum: 0}
+        maxMessagesPerMinute: {type: integer, minimum: 0}
+        failureThreshold: {type: integer, minimum: 0}
+        pauseDurationMs: {type: integer, minimum: 0}
+security: [{bearerAuth: []}]
+paths:
+  /health: {get: {security: [], responses: {'200': {description: OK}}}}
+  /admin: {get: {security: [], responses: {'200': {description: Admin shell}}}}
+  /api/v1/auth/login:
+    post:
+      security: []
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/LoginRequest'}}}}
+      responses: {'200': {description: Token, content: {application/json: {schema: {$ref: '#/components/schemas/TokenResponse'}}}}, '401': {description: Invalid credentials, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}}
+  /api/v1/auth/refresh: {post: {security: [], responses: {'200': {description: Token}}}}
+  /api/v1/auth/session: {get: {security: [], responses: {'200': {description: Token}}}}
+  /api/v1/auth/logout: {post: {responses: {'200': {description: Logged out}}}}
+  /api/v1/auth/password: {put: {responses: {'200': {description: Changed}}}}
+  /api/v1/sessions:
+    get:
+      responses: {'200': {description: Sessions, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Session'}}}}}}
+    post:
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateSessionRequest'}}}}
+      responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/Session'}}}}}
+  /api/v1/sessions/{sessionID}: {parameters: [{name: sessionID, in: path, required: true, schema: {type: string}}], get: {responses: {'200': {description: Session}}}, delete: {responses: {'200': {description: Deleted}}}}
+  /api/v1/sessions/{sessionID}/reconnect: {post: {responses: {'200': {description: Reconnecting}}}}
+  /api/v1/sessions/{sessionID}/disconnect: {post: {responses: {'200': {description: Disconnected}}}}
+  /api/v1/sessions/{sessionID}/logout: {post: {responses: {'200': {description: Logged out}}}}
+  /api/v1/sessions/{sessionID}/throttle:
+    put:
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ThrottleRequest'}}}}
+      responses: {'200': {description: Updated}}
+  /api/v1/messages/send:
+    post:
+      security: [{bearerAuth: []}, {apiKey: []}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/SendMessageRequest'}}}}
+      responses:
+        '202': {description: Queued, content: {application/json: {schema: {$ref: '#/components/schemas/QueuedMessage'}}}}
+        '400': {description: Invalid message, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /api/v1/messages: {get: {responses: {'200': {description: Messages}}}}
+  /api/v1/messages/{id}: {get: {responses: {'200': {description: Message}}}, delete: {responses: {'200': {description: Deleted}}}}
+  /api/v1/messages/{id}/resend: {post: {responses: {'202': {description: Requeued}}}}
+  /api/v1/api-keys: {get: {responses: {'200': {description: Keys}}}, post: {responses: {'201': {description: Created}}}}
+  /api/v1/api-keys/{id}: {put: {responses: {'200': {description: Updated}}}, delete: {responses: {'200': {description: Deleted}}}}
+  /api/v1/templates: {get: {responses: {'200': {description: Templates}}}, post: {responses: {'201': {description: Created}}}}
+  /api/v1/templates/{id}: {get: {responses: {'200': {description: Template}}}, put: {responses: {'200': {description: Updated}}}, delete: {responses: {'200': {description: Deleted}}}}
+  /api/v1/webhooks: {get: {responses: {'200': {description: Webhooks}}}, post: {requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/WebhookRequest'}}}}, responses: {'201': {description: Created}}}}
+  /api/v1/webhooks/{id}: {put: {requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/WebhookRequest'}}}}, responses: {'200': {description: Updated}}}, delete: {responses: {'200': {description: Deleted}}}}
+  /api/v1/webhooks/{id}/test: {post: {responses: {'202': {description: Queued}}}}
+  /api/v1/webhooks/deliveries/{id}/retry: {post: {responses: {'200': {description: Retried}}}}
+  /api/v1/webhooks/stats: {get: {responses: {'200': {description: Statistics}}}}
+  /api/v1/webhooks/deliveries: {get: {responses: {'200': {description: Deliveries}}}}
+  /api/v1/queue: {get: {responses: {'200': {description: Queue}}}}
+  /api/v1/stats: {get: {responses: {'200': {description: Statistics}}}}
+  /api/v1/monitoring: {get: {responses: {'200': {description: Monitoring}}}}
+  /api/v1/dashboard: {get: {responses: {'200': {description: Dashboard}}}}

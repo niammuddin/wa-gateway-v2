@@ -1,0 +1,39 @@
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.secret
+*.secrets
+*.credentials
+
+# WhatsApp/device credentials and runtime state
+auth_sessions/
+auth_sessions*/
+*.session
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs and local runtime output
+*.log
+logs/
+tmp/
+coverage/
+
+# Go build/test artifacts
+bin/
+dist/
+build/
+*.test
+*.out
+
+# IDE/editor and OS files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Docker/local tooling
+docker-compose.override.yml
+.docker/

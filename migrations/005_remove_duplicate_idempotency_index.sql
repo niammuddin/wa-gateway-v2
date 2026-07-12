@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS messages_idempotency_scope_key_unique;
