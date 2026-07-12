@@ -20,6 +20,7 @@ import (
 	"github.com/lib/pq"
 	"github.com/niammuddin/wa-gateway-v2/internal/admin"
 	"github.com/niammuddin/wa-gateway-v2/internal/auth"
+	"github.com/niammuddin/wa-gateway-v2/internal/events"
 	"github.com/niammuddin/wa-gateway-v2/internal/queue"
 	secretbox "github.com/niammuddin/wa-gateway-v2/internal/secret"
 	"github.com/niammuddin/wa-gateway-v2/internal/store"
@@ -34,6 +35,7 @@ type Server struct {
 	whatsapp   *whatsapp.SessionManager
 	db         *sql.DB
 	dispatcher *webhook.Dispatcher
+	events     *events.Broker
 	logger     *slog.Logger
 }
 
@@ -52,7 +54,13 @@ func NewWithSession(s store.Store, q queue.Queue, a *auth.Service, manager *what
 }
 
 func NewWithAll(s store.Store, q queue.Queue, a *auth.Service, manager *whatsapp.SessionManager, db *sql.DB, dispatcher *webhook.Dispatcher, logger *slog.Logger) *Server {
-	return &Server{store: s, queue: q, auth: a, whatsapp: manager, db: db, dispatcher: dispatcher, logger: logger}
+	return &Server{store: s, queue: q, auth: a, whatsapp: manager, db: db, dispatcher: dispatcher, events: events.NewBroker(), logger: logger}
+}
+func (s *Server) EventBroker() *events.Broker { return s.events }
+func (s *Server) SetEventBroker(b *events.Broker) {
+	if b != nil {
+		s.events = b
+	}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -115,6 +123,7 @@ func (s *Server) Handler() http.Handler {
 		})
 		r.With(s.requireAuth).Get("/stats", s.stats)
 		r.With(s.requireAuth).Get("/queue", s.queueStats)
+		r.With(s.requireAuth).Get("/events", s.sseEvents)
 		r.With(s.requireAuth).Get("/dashboard", s.dashboard)
 		r.With(s.requireAuth).Route("/messages", func(r chi.Router) {
 			r.Post("/send", s.sendMessage)
@@ -141,6 +150,9 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 			p, err = s.auth.VerifyAPIKey(r.Context(), key, clientIP(r))
 		} else {
 			header := r.Header.Get("Authorization")
+			if header == "" && r.URL.Query().Get("token") != "" {
+				header = "Bearer " + r.URL.Query().Get("token")
+			}
 			if len(header) < 8 || !strings.EqualFold(header[:7], "Bearer ") {
 				err = auth.ErrUnauthorized
 			} else {
@@ -153,6 +165,34 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalKey{}, p)))
 	})
+}
+
+func (s *Server) sseEvents(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", 500)
+		return
+	}
+	ch, unsubscribe := s.events.Subscribe()
+	defer unsubscribe()
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(": connected\n\n"))
+	flusher.Flush()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case evt, ok := <-ch:
+			if !ok {
+				return
+			}
+			_, _ = w.Write([]byte("event: " + evt.Name + "\ndata: " + string(evt.Data) + "\n\n"))
+			flusher.Flush()
+		}
+	}
 }
 
 func clientIP(r *http.Request) string {

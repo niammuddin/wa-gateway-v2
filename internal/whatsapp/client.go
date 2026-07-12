@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waCompanionReg"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types"
@@ -79,6 +80,11 @@ func (c *WhatsMeowClient) JID() string {
 }
 
 func NewWhatsMeowClient(device *store.Device, module string) *WhatsMeowClient {
+	// Use the supported Chrome companion profile for the linked-device label.
+	// This is metadata only; it does not change the session's cryptographic
+	// identity or credential storage.
+	store.DeviceProps.PlatformType = waCompanionReg.DeviceProps_CHROME.Enum()
+	store.SetOSInfo("Linux", [3]uint32{1, 0, 0})
 	logger := waLog.Stdout(module, "WARN", false)
 	return &WhatsMeowClient{client: whatsmeow.NewClient(device, logger), status: "disconnected"}
 }

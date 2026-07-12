@@ -332,8 +332,14 @@ function app(){return{
    const validPages=this.navItems.map(item=>item.page);
    if(validPages.includes(savedPage)) this.page=savedPage;
    await this.loadAll();
-   this.pollTimer=setInterval(()=>this.loadAll(),30000)
+   this.connectEvents();
    this.qrTimer=setInterval(()=>{this.qrTick++},1000)
+ },
+ connectEvents(){
+   if(this.events) this.events.close();
+   this.events=new EventSource('/api/v1/events?token='+encodeURIComponent(this.token));
+   this.events.onmessage=()=>this.loadAll();
+   ['session.connected','session.disconnected','message.sent','message.delivered','message.read','message.failed'].forEach(name=>this.events.addEventListener(name,()=>this.loadAll()));
  },
  async setPage(pageName){
    this.page=pageName;

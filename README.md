@@ -1,5 +1,7 @@
 # WA Gateway Go
 
+Daily development workflow: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+
 Port Go dari `https://github.com/niammuddin/wa-gateway`.
 
 Dokumen desain:

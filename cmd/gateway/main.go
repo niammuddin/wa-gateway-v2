@@ -14,6 +14,7 @@ import (
 
 	"github.com/niammuddin/wa-gateway-v2/internal/auth"
 	"github.com/niammuddin/wa-gateway-v2/internal/database"
+	"github.com/niammuddin/wa-gateway-v2/internal/events"
 	"github.com/niammuddin/wa-gateway-v2/internal/httpapi"
 	"github.com/niammuddin/wa-gateway-v2/internal/queue"
 	"github.com/niammuddin/wa-gateway-v2/internal/store"
@@ -34,6 +35,7 @@ func main() {
 	var messageWorker *queue.Worker
 	var webhookDispatcher *webhook.Dispatcher
 	var limiter *throttle.Limiter
+	eventBroker := events.NewBroker()
 	if databaseURL := os.Getenv("DATABASE_URL"); databaseURL != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		db, err := database.Open(ctx, databaseURL)
@@ -97,18 +99,20 @@ func main() {
 			logger.Error("queue pending-job lookup failed", "error", err)
 		}
 		if sessionManager != nil {
+			var eventDispatcher events.Dispatcher = eventBroker
 			if databaseConn != nil {
 				webhookDispatcher = webhook.New(databaseConn)
 				limiter = throttle.New(databaseConn)
-				sessionManager.SetDispatcher(webhookDispatcher)
+				eventDispatcher = events.Multi{Targets: []events.Dispatcher{eventBroker, webhookDispatcher}}
 			}
+			sessionManager.SetDispatcher(eventDispatcher)
 			messageWorker, err = queue.NewWorker(redisURL, dataStore, func(sessionID string) (queue.Sender, bool) {
 				client, ok := sessionManager.Client(sessionID)
 				if !ok {
 					return nil, false
 				}
 				return whatsapp.QueueSender{Client: client}, true
-			}, webhookDispatcher, limiter)
+			}, eventDispatcher, limiter)
 			if err != nil {
 				logger.Error("message worker configuration failed", "error", err)
 				os.Exit(1)
@@ -121,6 +125,7 @@ func main() {
 		}
 	}
 	app := httpapi.NewWithAll(dataStore, messageQueue, authService, sessionManager, databaseConn, webhookDispatcher, logger)
+	app.SetEventBroker(eventBroker)
 	server := &http.Server{Addr: env("PORT", ":3000"), Handler: app.Handler(), ReadHeaderTimeout: 10 * time.Second}
 
 	go func() {

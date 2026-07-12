@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/skip2/go-qrcode"
 	"github.com/niammuddin/wa-gateway-v2/internal/store"
+	"github.com/skip2/go-qrcode"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
@@ -55,9 +55,15 @@ func (m *SessionManager) Create(ctx context.Context, sessionID, method, phone st
 			_ = m.store.SetSessionIdentity(context.Background(), sessionID, v.ID.String(), v.ID.User)
 			_ = m.store.UpdateSession(context.Background(), sessionID, "connecting", "", "", v.ID.User)
 		case *events.Connected:
-			_ = m.store.UpdateSession(context.Background(), sessionID, "connected", "", "", phone)
+			connectedPhone := phone
+			if connectedPhone == "" {
+				if current, ok, _ := m.store.GetSession(context.Background(), sessionID); ok {
+					connectedPhone = current.PhoneNumber
+				}
+			}
+			_ = m.store.UpdateSession(context.Background(), sessionID, "connected", "", "", connectedPhone)
 			if m.dispatcher != nil {
-				_ = m.dispatcher.Dispatch(context.Background(), "session.connected", map[string]any{"sessionId": sessionID, "phoneNumber": phone})
+				_ = m.dispatcher.Dispatch(context.Background(), "session.connected", map[string]any{"sessionId": sessionID, "phoneNumber": connectedPhone})
 			}
 		case *events.Disconnected:
 			_ = m.store.UpdateSession(context.Background(), sessionID, "disconnected", "", "", phone)
@@ -150,6 +156,27 @@ func (m *SessionManager) Load(ctx context.Context) error {
 			continue
 		}
 		client := NewWhatsMeowClient(device, "WhatsApp/"+session.SessionID)
+		// Restored clients need the same lifecycle handlers as newly-created
+		// clients; otherwise a successful reconnect remains stuck in the
+		// database as "reconnecting".
+		client.AddEventHandler(func(evt any) {
+			switch v := evt.(type) {
+			case *events.Connected:
+				_ = m.store.UpdateSession(context.Background(), session.SessionID, "connected", "", "", session.PhoneNumber)
+				if m.dispatcher != nil {
+					_ = m.dispatcher.Dispatch(context.Background(), "session.connected", map[string]any{"sessionId": session.SessionID, "phoneNumber": session.PhoneNumber})
+				}
+			case *events.Disconnected:
+				_ = m.store.UpdateSession(context.Background(), session.SessionID, "disconnected", "", "", session.PhoneNumber)
+				if m.dispatcher != nil {
+					_ = m.dispatcher.Dispatch(context.Background(), "session.disconnected", map[string]any{"sessionId": session.SessionID, "phoneNumber": session.PhoneNumber})
+				}
+			case *events.LoggedOut:
+				_ = m.store.UpdateSession(context.Background(), session.SessionID, "logged_out", "", "", session.PhoneNumber)
+			case *events.PairSuccess:
+				_ = m.store.SetSessionIdentity(context.Background(), session.SessionID, v.ID.String(), v.ID.User)
+			}
+		})
 		m.mu.Lock()
 		m.clients[session.SessionID] = client
 		m.mu.Unlock()
