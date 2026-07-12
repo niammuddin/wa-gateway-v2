@@ -9,8 +9,22 @@ fast code changes and direct logs.
 cp .env.example .env
 # Edit .env and replace all placeholders.
 docker compose up -d postgres redis
-set -a; source .env; set +a
-go run ./cmd/gateway
+air
+```
+
+`air` otomatis rebuild dan restart gateway ketika file source berubah. Install
+sekali jika belum tersedia:
+
+```bash
+go install github.com/air-verse/air@latest
+# zsh jika `air` belum ditemukan:
+export PATH="$HOME/go/bin:$PATH"
+```
+
+Atau gunakan shortcut:
+
+```bash
+make dev
 ```
 
 When the gateway runs on the host, use `localhost` for database and Redis

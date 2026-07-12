@@ -1,0 +1,19 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+cmd = "go build -o ./tmp/wa-gateway ./cmd/gateway"
+bin = "./tmp/wa-gateway"
+full_bin = "set -a; source .env; set +a; ./tmp/wa-gateway"
+include_ext = ["go", "html", "css", "js", "sql"]
+exclude_dir = ["tmp", "vendor", "auth_sessions", ".git"]
+delay = 500
+stop_on_error = true
+send_interrupt = true
+kill_delay = 500
+
+[log]
+time = true
+
+[screen]
+clear_on_rebuild = true

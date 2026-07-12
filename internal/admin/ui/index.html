@@ -215,8 +215,8 @@
             <!-- Status + Type -->
             <div class="flex items-center gap-3">
               <span class="inline-flex items-center rounded-full px-3 py-1 text-sm font-medium ring-1 ring-inset capitalize"
-                    :class="activeMsg?.status==='sent'||activeMsg?.status==='delivered'?'bg-green-50 text-green-700 ring-green-600/20':activeMsg?.status==='failed'?'bg-red-50 text-red-700 ring-red-600/10':'bg-yellow-50 text-yellow-800 ring-yellow-600/20'">
-                <svg class="mr-1.5 h-2 w-2" :class="activeMsg?.status==='sent'||activeMsg?.status==='delivered'?'fill-green-500':activeMsg?.status==='failed'?'fill-red-500':'fill-yellow-500'" viewBox="0 0 6 6"><circle cx="3" cy="3" r="3" /></svg>
+                    :class="messageStatusClass(activeMsg?.status)">
+                <svg class="mr-1.5 h-2 w-2" :class="messageStatusDotClass(activeMsg?.status)" viewBox="0 0 6 6"><circle cx="3" cy="3" r="3" /></svg>
                 <span x-text="activeMsg?.status"></span>
               </span>
               <span class="inline-flex items-center rounded-full bg-gray-50 px-3 py-1 text-sm font-medium text-gray-600 ring-1 ring-inset ring-gray-500/10 uppercase" x-text="activeMsg?.type"></span>
@@ -594,8 +594,8 @@
                     <td class="px-5 py-3 text-gray-600 max-w-[180px] truncate" x-text="m.content||'-'"></td>
                     <td class="px-5 py-3">
                       <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset capitalize"
-                            :class="m.status==='sent'||m.status==='delivered'?'bg-green-50 text-green-700 ring-green-600/20':m.status==='failed'?'bg-red-50 text-red-700 ring-red-600/10':'bg-yellow-50 text-yellow-800 ring-yellow-600/20'">
-                        <svg class="mr-1.5 h-1.5 w-1.5" :class="m.status==='sent'||m.status==='delivered'?'fill-green-500':m.status==='failed'?'fill-red-500':'fill-yellow-500'" viewBox="0 0 6 6" aria-hidden="true"><circle cx="3" cy="3" r="3" /></svg>
+                            :class="messageStatusClass(m.status)">
+                        <svg class="mr-1.5 h-1.5 w-1.5" :class="messageStatusDotClass(m.status)" viewBox="0 0 6 6" aria-hidden="true"><circle cx="3" cy="3" r="3" /></svg>
                         <span x-text="m.status"></span>
                       </span>
                     </td>

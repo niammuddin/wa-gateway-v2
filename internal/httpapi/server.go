@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -150,9 +151,6 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 			p, err = s.auth.VerifyAPIKey(r.Context(), key, clientIP(r))
 		} else {
 			header := r.Header.Get("Authorization")
-			if header == "" && r.URL.Query().Get("token") != "" {
-				header = "Bearer " + r.URL.Query().Get("token")
-			}
 			if len(header) < 8 || !strings.EqualFold(header[:7], "Bearer ") {
 				err = auth.ErrUnauthorized
 			} else {
@@ -956,17 +954,88 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listMessages(w http.ResponseWriter, r *http.Request) {
-	items, err := s.store.ListMessages(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	page := 1
+	limit := 20
+	if n, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && n > 0 {
+		page = n
+	}
+	if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && n > 0 && n <= 100 {
+		limit = n
+	}
+	if s.db == nil {
+		all, err := s.store.ListMessages(r.Context())
+		if err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+		search, status, sessionID := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("search"))), r.URL.Query().Get("status"), r.URL.Query().Get("sessionId")
+		filtered := make([]store.Message, 0, len(all))
+		for _, v := range all {
+			if status != "" && v.Status != status || sessionID != "" && v.SessionID != sessionID || search != "" && !strings.Contains(strings.ToLower(v.To), search) && !strings.Contains(strings.ToLower(v.Content), search) {
+				continue
+			}
+			filtered = append(filtered, v)
+		}
+		start := (page - 1) * limit
+		if start > len(filtered) {
+			start = len(filtered)
+		}
+		end := start + limit
+		if end > len(filtered) {
+			end = len(filtered)
+		}
+		write(w, 200, map[string]any{"data": filtered[start:end], "total": len(filtered), "page": page, "limit": limit})
 		return
 	}
-	write(w, http.StatusOK, map[string]any{"data": items, "total": len(items), "page": 1, "limit": 20})
+	where := []string{"1=1"}
+	args := []any{}
+	add := func(v any, clause string) {
+		args = append(args, v)
+		where = append(where, clause+"$"+strconv.Itoa(len(args)))
+	}
+	if v := strings.TrimSpace(r.URL.Query().Get("sessionId")); v != "" {
+		add(v, "session_id=")
+	}
+	if v := strings.TrimSpace(r.URL.Query().Get("status")); v != "" {
+		add(v, "status=")
+	}
+	if v := strings.TrimSpace(r.URL.Query().Get("search")); v != "" {
+		args = append(args, "%"+v+"%")
+		p := "$" + strconv.Itoa(len(args))
+		where = append(where, "(\"to\" ILIKE "+p+" OR COALESCE(content,'') ILIKE "+p+")")
+	}
+	filter := strings.Join(where, " AND ")
+	var total int
+	if err := s.db.QueryRowContext(r.Context(), "SELECT count(*) FROM messages WHERE "+filter, args...).Scan(&total); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	args = append(args, limit, (page-1)*limit)
+	rows, err := s.db.QueryContext(r.Context(), "SELECT id,COALESCE(job_id,''),session_id,\"to\",type,COALESCE(content,''),status,COALESCE(wa_message_id,''),COALESCE(error,''),created_at FROM messages WHERE "+filter+" ORDER BY created_at DESC LIMIT $"+strconv.Itoa(len(args)-1)+" OFFSET $"+strconv.Itoa(len(args)), args...)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	defer rows.Close()
+	items := []store.Message{}
+	for rows.Next() {
+		var v store.Message
+		if err := rows.Scan(&v.ID, &v.JobID, &v.SessionID, &v.To, &v.Type, &v.Content, &v.Status, &v.WAID, &v.Error, &v.CreatedAt); err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+		items = append(items, v)
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	write(w, http.StatusOK, map[string]any{"data": items, "total": total, "page": page, "limit": limit})
 }
 func (s *Server) getMessage(w http.ResponseWriter, r *http.Request) {
-	var id, job, session, to, typ, content, status, waID, errorText string
-	var created time.Time
-	err := s.db.QueryRowContext(r.Context(), `SELECT id,COALESCE(job_id,''),session_id,"to",type,COALESCE(content,''),status,COALESCE(wa_message_id,''),COALESCE(error,''),created_at FROM messages WHERE id=$1`, chi.URLParam(r, "id")).Scan(&id, &job, &session, &to, &typ, &content, &status, &waID, &errorText, &created)
+	var id, job, session, to, typ, content, status, waID, errorText, url, filename, mime string
+	var created, queued, sent, delivered, read, updated sql.NullTime
+	err := s.db.QueryRowContext(r.Context(), `SELECT id,COALESCE(job_id,''),session_id,"to",type,COALESCE(content,''),status,COALESCE(wa_message_id,''),COALESCE(error,''),COALESCE(url,''),COALESCE(filename,''),COALESCE(mime_type,''),created_at,queued_at,sent_at,delivered_at,read_at,updated_at FROM messages WHERE id=$1`, chi.URLParam(r, "id")).Scan(&id, &job, &session, &to, &typ, &content, &status, &waID, &errorText, &url, &filename, &mime, &created, &queued, &sent, &delivered, &read, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, 404, "Message not found")
 		return
@@ -975,7 +1044,13 @@ func (s *Server) getMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
-	write(w, 200, map[string]any{"id": id, "job_id": job, "session_id": session, "to": to, "type": typ, "content": content, "status": status, "wa_message_id": waID, "error": errorText, "created_at": created})
+	date := func(v sql.NullTime) any {
+		if !v.Valid {
+			return nil
+		}
+		return v.Time
+	}
+	write(w, 200, map[string]any{"id": id, "job_id": job, "session_id": session, "to": to, "type": typ, "content": content, "status": status, "wa_message_id": waID, "error": errorText, "url": url, "filename": filename, "mime_type": mime, "created_at": date(created), "queued_at": date(queued), "sent_at": date(sent), "delivered_at": date(delivered), "read_at": date(read), "updated_at": date(updated)})
 }
 func (s *Server) resendMessage(w http.ResponseWriter, r *http.Request) {
 	var old store.Message

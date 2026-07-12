@@ -175,6 +175,23 @@ func (m *SessionManager) Load(ctx context.Context) error {
 				_ = m.store.UpdateSession(context.Background(), session.SessionID, "logged_out", "", "", session.PhoneNumber)
 			case *events.PairSuccess:
 				_ = m.store.SetSessionIdentity(context.Background(), session.SessionID, v.ID.String(), v.ID.User)
+			case *events.Receipt:
+				status := ""
+				switch v.Type {
+				case events.ReceiptTypeDelivered:
+					status = "delivered"
+				case events.ReceiptTypeRead:
+					status = "read"
+				}
+				if status != "" {
+					for _, id := range v.MessageIDs {
+						waID := string(id)
+						if msg, ok, _ := m.store.GetMessageByWAID(context.Background(), session.SessionID, waID); ok && m.dispatcher != nil {
+							_ = m.dispatcher.Dispatch(context.Background(), "message."+status, map[string]any{"messageId": msg.ID, "sessionId": session.SessionID, "to": msg.To, "waMessageId": waID, "referenceId": msg.ReferenceID, "sourceType": msg.SourceType, "sourceId": msg.SourceID, "timestamp": v.Timestamp.UTC().Format(time.RFC3339)})
+						}
+						_ = m.store.UpdateMessageReceipt(context.Background(), session.SessionID, waID, status, v.Timestamp)
+					}
+				}
 			}
 		})
 		m.mu.Lock()

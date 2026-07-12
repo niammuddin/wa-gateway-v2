@@ -41,10 +41,12 @@ function app(){return{
    if (this.pollTimer) clearInterval(this.pollTimer);
    if (this.sessionPollTimer) clearTimeout(this.sessionPollTimer);
    if (this.qrTimer) clearInterval(this.qrTimer);
+   if (this.eventsAbort) this.eventsAbort.abort();
    this.refreshTimer = null;
    this.pollTimer = null;
    this.sessionPollTimer = null;
    this.qrTimer = null;
+   this.eventsAbort = null;
  },
  scheduleRefresh(expiresIn){
    if (this.refreshTimer) clearTimeout(this.refreshTimer);
@@ -184,9 +186,11 @@ function app(){return{
           }
         } catch (err) {}
       },
-      openMsgDetail(m) {
+      async openMsgDetail(m) {
         this.activeMsg = m;
         this.drawer = true;
+        const detail = await this.api('/messages/' + encodeURIComponent(m.id));
+        if (detail) this.activeMsg = detail;
       },
       async deleteMessage(id) {
         const res = await this.api('/messages/' + encodeURIComponent(id), { method: 'DELETE' });
@@ -321,6 +325,8 @@ function app(){return{
    return {delivered:'bg-green-50 text-green-700 ring-green-600/20',failed:'bg-red-50 text-red-700 ring-red-600/20',retrying:'bg-amber-50 text-amber-700 ring-amber-600/20',processing:'bg-blue-50 text-blue-700 ring-blue-600/20',queued:'bg-gray-50 text-gray-600 ring-gray-500/10',paused:'bg-gray-50 text-gray-500 ring-gray-500/10'}[status]||'bg-gray-50 text-gray-600 ring-gray-500/10';
  },
  formatPairingCode(code){return code?String(code).replace(/\s|-/g,'').replace(/^(.{4})(.*)$/, '$1-$2'):'-';},
+ messageStatusClass(status){return {queued:'bg-amber-50 text-amber-800 ring-amber-600/20',sent:'bg-blue-50 text-blue-700 ring-blue-600/20',delivered:'bg-indigo-50 text-indigo-700 ring-indigo-600/20',read:'bg-green-50 text-green-700 ring-green-600/20',failed:'bg-red-50 text-red-700 ring-red-600/20'}[status]||'bg-gray-50 text-gray-600 ring-gray-500/10';},
+ messageStatusDotClass(status){return {queued:'fill-amber-500',sent:'fill-blue-500',delivered:'fill-indigo-500',read:'fill-green-500',failed:'fill-red-500'}[status]||'fill-gray-400';},
  formatDateTime(value){return value?new Date(value).toLocaleString():'-';},
 
  async init(){
@@ -336,10 +342,17 @@ function app(){return{
    this.qrTimer=setInterval(()=>{this.qrTick++},1000)
  },
  connectEvents(){
-   if(this.events) this.events.close();
-   this.events=new EventSource('/api/v1/events?token='+encodeURIComponent(this.token));
-   this.events.onmessage=()=>this.loadAll();
-   ['session.connected','session.disconnected','message.sent','message.delivered','message.read','message.failed'].forEach(name=>this.events.addEventListener(name,()=>this.loadAll()));
+   if(this.eventsAbort) this.eventsAbort.abort();
+   const controller=new AbortController(); this.eventsAbort=controller;
+   const eventNames=new Set(['session.connected','session.disconnected','message.sent','message.delivered','message.read','message.failed']);
+   (async()=>{ try {
+     const res=await fetch('/api/v1/events',{headers:{Authorization:'Bearer '+this.token},signal:controller.signal});
+     if(!res.ok) throw new Error('SSE '+res.status);
+     const reader=res.body.getReader(), decoder=new TextDecoder(); let buffer='';
+     while(true){ const {value,done}=await reader.read(); if(done) break; buffer+=decoder.decode(value,{stream:true}); const chunks=buffer.split('\n\n'); buffer=chunks.pop()||'';
+       for(const chunk of chunks){ const name=(chunk.match(/^event: ?(.+)$/m)||[])[1]||'message'; if(name==='message'||eventNames.has(name)) await this.loadAll(); }
+     }
+   } catch(err){ if(!controller.signal.aborted) setTimeout(()=>{if(this.token) this.connectEvents()},3000); } })();
  },
  async setPage(pageName){
    this.page=pageName;
