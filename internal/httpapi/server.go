@@ -302,7 +302,7 @@ func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
-	var out []map[string]any
+	out := make([]map[string]any, 0)
 	for rows.Next() {
 		var id, name, body string
 		var created, updated time.Time
@@ -319,14 +319,20 @@ func (s *Server) createTemplate(w http.ResponseWriter, r *http.Request) {
 		Name string `json:"name"`
 		Body string `json:"body"`
 	}
-	if !decode(r, &b) || strings.TrimSpace(b.Name) == "" || strings.TrimSpace(b.Body) == "" {
+	if !decode(r, &b) {
+		writeError(w, 400, "name and body are required")
+		return
+	}
+	b.Name = strings.TrimSpace(b.Name)
+	b.Body = strings.TrimSpace(b.Body)
+	if b.Name == "" || b.Body == "" {
 		writeError(w, 400, "name and body are required")
 		return
 	}
 	var out map[string]any
 	var id string
 	var created, updated time.Time
-	err := s.db.QueryRowContext(r.Context(), `INSERT INTO templates(name,body) VALUES($1,$2) RETURNING id,name,body,created_at,updated_at`, strings.TrimSpace(b.Name), b.Body).Scan(&id, &b.Name, &b.Body, &created, &updated)
+	err := s.db.QueryRowContext(r.Context(), `INSERT INTO templates(name,body) VALUES($1,$2) RETURNING id,name,body,created_at,updated_at`, b.Name, b.Body).Scan(&id, &b.Name, &b.Body, &created, &updated)
 	if err != nil {
 		writeError(w, 400, err.Error())
 		return
@@ -353,7 +359,13 @@ func (s *Server) updateTemplate(w http.ResponseWriter, r *http.Request) {
 		Name string `json:"name"`
 		Body string `json:"body"`
 	}
-	if !decode(r, &b) || strings.TrimSpace(b.Name) == "" || strings.TrimSpace(b.Body) == "" {
+	if !decode(r, &b) {
+		writeError(w, 400, "name and body are required")
+		return
+	}
+	b.Name = strings.TrimSpace(b.Name)
+	b.Body = strings.TrimSpace(b.Body)
+	if b.Name == "" || b.Body == "" {
 		writeError(w, 400, "name and body are required")
 		return
 	}
@@ -373,6 +385,10 @@ func (s *Server) updateTemplate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) deleteTemplate(w http.ResponseWriter, r *http.Request) {
 	res, err := s.db.ExecContext(r.Context(), `DELETE FROM templates WHERE id=$1`, chi.URLParam(r, "id"))
 	if err != nil {
+		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23503" {
+			writeError(w, http.StatusConflict, "Template cannot be deleted because it is used by message history")
+			return
+		}
 		writeError(w, 500, err.Error())
 		return
 	}
