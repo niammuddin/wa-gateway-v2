@@ -24,6 +24,7 @@ import (
 	"github.com/niammuddin/wa-gateway-v2/internal/admin"
 	"github.com/niammuddin/wa-gateway-v2/internal/auth"
 	"github.com/niammuddin/wa-gateway-v2/internal/events"
+	"github.com/niammuddin/wa-gateway-v2/internal/landing"
 	"github.com/niammuddin/wa-gateway-v2/internal/queue"
 	secretbox "github.com/niammuddin/wa-gateway-v2/internal/secret"
 	"github.com/niammuddin/wa-gateway-v2/internal/store"
@@ -68,6 +69,7 @@ func (s *Server) SetEventBroker(b *events.Broker) {
 
 func (s *Server) Handler() http.Handler {
 	r := chi.NewRouter()
+	r.Get("/", landing.Handler)
 	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
 		write(w, http.StatusOK, map[string]string{"status": "ok"})
 	})

@@ -113,6 +113,7 @@ func TestPublicContractRoutes(t *testing.T) {
 		path       string
 		wantStatus int
 	}{
+		{name: "landing page", method: http.MethodGet, path: "/", wantStatus: http.StatusOK},
 		{name: "health", method: http.MethodGet, path: "/health", wantStatus: http.StatusOK},
 		{name: "admin shell", method: http.MethodGet, path: "/admin", wantStatus: http.StatusOK},
 		{name: "auth session without cookie", method: http.MethodGet, path: "/api/v1/auth/session", wantStatus: http.StatusNoContent},
