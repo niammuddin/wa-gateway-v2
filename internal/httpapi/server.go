@@ -10,8 +10,10 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -79,15 +81,35 @@ func (s *Server) Handler() http.Handler {
 			r.With(s.requireAuth).Post("/logout", s.logout)
 			r.With(s.requireAuth).Put("/password", s.changePassword)
 		})
-		r.With(s.requireAuth).Get("/monitoring", func(w http.ResponseWriter, _ *http.Request) {
+		r.With(s.requireAuth).Get("/monitoring", func(w http.ResponseWriter, req *http.Request) {
 			databaseStatus, redisStatus := "not_configured", "not_configured"
-			if os.Getenv("DATABASE_URL") != "" {
-				databaseStatus = "configured"
+			if s.db != nil {
+				if err := s.db.PingContext(req.Context()); err == nil {
+					databaseStatus = "up"
+				} else {
+					databaseStatus = "down"
+				}
 			}
-			if os.Getenv("REDIS_URL") != "" {
-				redisStatus = "configured"
+			if raw := os.Getenv("REDIS_URL"); raw != "" {
+				if parsed, err := url.Parse(raw); err == nil {
+					host := parsed.Host
+					if host == "" {
+						host = "localhost:6379"
+					}
+					conn, err := net.DialTimeout("tcp", host, 500*time.Millisecond)
+					if err == nil {
+						redisStatus = "up"
+						_ = conn.Close()
+					} else {
+						redisStatus = "down"
+					}
+				}
 			}
-			write(w, http.StatusOK, map[string]string{"status": "ok", "database": databaseStatus, "redis": redisStatus})
+			systemStatus := "healthy"
+			if databaseStatus == "down" || redisStatus == "down" {
+				systemStatus = "degraded"
+			}
+			write(w, http.StatusOK, map[string]any{"status": systemStatus, "services": map[string]string{"postgres": databaseStatus, "redis": redisStatus}, "database": databaseStatus, "redis": redisStatus})
 		})
 		r.With(s.requireAuth).Route("/sessions", func(r chi.Router) {
 			r.Get("/", s.listSessions)
@@ -401,7 +423,7 @@ func (s *Server) deleteTemplate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listWebhooks(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.QueryContext(r.Context(), `SELECT id,url,events,COALESCE(session_ids,ARRAY[]::text[]),is_active,created_at,updated_at FROM webhooks ORDER BY created_at DESC`)
+	rows, err := s.db.QueryContext(r.Context(), `SELECT id,url,events,COALESCE(session_ids,ARRAY[]::text[]),COALESCE(api_key_id::text,''),COALESCE(secret_encrypted,''),is_active,created_at,updated_at FROM webhooks ORDER BY created_at DESC`)
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return
@@ -411,13 +433,14 @@ func (s *Server) listWebhooks(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var id, url string
 		var events, scopes []string
+		var apiKeyID, encrypted string
 		var active bool
 		var created, updated time.Time
-		if err := rows.Scan(&id, &url, pq.Array(&events), pq.Array(&scopes), &active, &created, &updated); err != nil {
+		if err := rows.Scan(&id, &url, pq.Array(&events), pq.Array(&scopes), &apiKeyID, &encrypted, &active, &created, &updated); err != nil {
 			writeError(w, 500, err.Error())
 			return
 		}
-		out = append(out, map[string]any{"id": id, "url": url, "events": events, "session_ids": scopes, "is_active": active, "created_at": created, "updated_at": updated})
+		out = append(out, map[string]any{"id": id, "url": url, "events": events, "session_ids": scopes, "api_key_id": apiKeyID, "has_secret": encrypted != "", "is_active": active, "created_at": created, "updated_at": updated})
 	}
 	write(w, 200, out)
 }
@@ -553,47 +576,131 @@ func (s *Server) webhookStats(w http.ResponseWriter, r *http.Request) {
 	write(w, 200, map[string]any{"total": total, "byStatus": by})
 }
 func (s *Server) webhookDeliveries(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.QueryContext(r.Context(), `SELECT id,webhook_id,event,status,attempts,response_status,error,created_at,delivered_at FROM webhook_deliveries ORDER BY created_at DESC LIMIT 100`)
+	page, limit := 1, 20
+	if n, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && n > 0 {
+		page = n
+	}
+	if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && n > 0 && n <= 100 {
+		limit = n
+	}
+	where := []string{"1=1"}
+	args := []any{}
+	add := func(v any, clause string) {
+		args = append(args, v)
+		where = append(where, clause+"$"+strconv.Itoa(len(args)))
+	}
+	if v := strings.TrimSpace(r.URL.Query().Get("status")); v != "" {
+		add(v, "d.status=")
+	}
+	if v := strings.TrimSpace(r.URL.Query().Get("webhookId")); v != "" {
+		add(v, "d.webhook_id=")
+	}
+	if v := strings.TrimSpace(r.URL.Query().Get("search")); v != "" {
+		args = append(args, "%"+v+"%")
+		p := "$" + strconv.Itoa(len(args))
+		where = append(where, "(d.event ILIKE "+p+" OR d.id::text ILIKE "+p+" OR COALESCE(d.error,'') ILIKE "+p+")")
+	}
+	filter := strings.Join(where, " AND ")
+	var total int
+	if err := s.db.QueryRowContext(r.Context(), "SELECT count(*) FROM webhook_deliveries d WHERE "+filter, args...).Scan(&total); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	args = append(args, limit, (page-1)*limit)
+	rows, err := s.db.QueryContext(r.Context(), `SELECT d.id,d.webhook_id,d.event_id,d.event,d.payload,d.status,d.attempts,d.max_attempts,d.response_status,d.error,d.queued_at,d.created_at,d.delivered_at,d.updated_at FROM webhook_deliveries d WHERE `+filter+` ORDER BY d.created_at DESC LIMIT $`+strconv.Itoa(len(args)-1)+` OFFSET $`+strconv.Itoa(len(args)), args...)
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return
 	}
 	defer rows.Close()
-	var out []map[string]any
+	out := make([]map[string]any, 0)
 	for rows.Next() {
 		var id, wid, event, status string
-		var attempts int
+		var eventID string
+		var payload []byte
+		var attempts, maxAttempts int
 		var response sql.NullInt64
 		var message sql.NullString
-		var created time.Time
-		var delivered sql.NullTime
-		if err := rows.Scan(&id, &wid, &event, &status, &attempts, &response, &message, &created, &delivered); err != nil {
+		var queued, created, delivered, updated sql.NullTime
+		if err := rows.Scan(&id, &wid, &eventID, &event, &payload, &status, &attempts, &maxAttempts, &response, &message, &queued, &created, &delivered, &updated); err != nil {
 			writeError(w, 500, err.Error())
 			return
 		}
-		out = append(out, map[string]any{"id": id, "webhook_id": wid, "event": event, "status": status, "attempts": attempts, "response_status": response.Int64, "error": message.String, "created_at": created, "delivered_at": delivered.Time})
+		var decoded any
+		_ = json.Unmarshal(payload, &decoded)
+		date := func(v sql.NullTime) any {
+			if !v.Valid {
+				return nil
+			}
+			return v.Time
+		}
+		out = append(out, map[string]any{"id": id, "webhook_id": wid, "event_id": eventID, "event": event, "payload": decoded, "status": status, "attempts": attempts, "max_attempts": maxAttempts, "response_status": func() any {
+			if !response.Valid {
+				return nil
+			}
+			return response.Int64
+		}(), "error": message.String, "queued_at": date(queued), "created_at": date(created), "delivered_at": date(delivered), "updated_at": date(updated)})
 	}
-	write(w, 200, map[string]any{"data": out, "total": len(out), "page": 1, "limit": 100})
+	write(w, 200, map[string]any{"data": out, "total": total, "page": page, "limit": limit})
 }
 
 func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
-	var messages, sessions int
-	_ = s.db.QueryRowContext(r.Context(), `SELECT count(*) FROM messages`).Scan(&messages)
-	_ = s.db.QueryRowContext(r.Context(), `SELECT count(*) FROM sessions WHERE status='connected'`).Scan(&sessions)
-	rows, err := s.db.QueryContext(r.Context(), `SELECT status,count(*) FROM messages GROUP BY status`)
+	sessionID := strings.TrimSpace(r.URL.Query().Get("sessionId"))
+	where := "1=1"
+	args := []any{}
+	if sessionID != "" {
+		args = append(args, sessionID)
+		where = "session_id=$1"
+	}
+	var total, success, failed, today, active int
+	if err := s.db.QueryRowContext(r.Context(), "SELECT count(*),count(*) FILTER (WHERE status IN ('delivered','read')),count(*) FILTER (WHERE status='failed'),count(*) FILTER (WHERE created_at >= CURRENT_DATE) FROM messages WHERE "+where, args...).Scan(&total, &success, &failed, &today); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	if sessionID == "" {
+		_ = s.db.QueryRowContext(r.Context(), `SELECT count(*) FROM sessions WHERE status='connected'`).Scan(&active)
+	} else {
+		_ = s.db.QueryRowContext(r.Context(), `SELECT count(*) FROM sessions WHERE session_id=$1 AND status='connected'`, sessionID).Scan(&active)
+	}
+	rate := 0.0
+	if total > 0 {
+		rate = float64(success) * 100 / float64(total)
+	}
+	daily := make([]map[string]any, 0)
+	rows, err := s.db.QueryContext(r.Context(), "SELECT d::date, count(m.id) FROM generate_series(CURRENT_DATE-6,CURRENT_DATE,interval '1 day') d LEFT JOIN messages m ON m.created_at::date=d::date AND "+where+" GROUP BY d ORDER BY d", args...)
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return
 	}
-	defer rows.Close()
-	by := map[string]int{}
 	for rows.Next() {
-		var status string
+		var day time.Time
 		var n int
-		_ = rows.Scan(&status, &n)
-		by[status] = n
+		if err := rows.Scan(&day, &n); err != nil {
+			rows.Close()
+			writeError(w, 500, err.Error())
+			return
+		}
+		daily = append(daily, map[string]any{"date": day.Format("2006-01-02"), "total": n})
 	}
-	write(w, 200, map[string]any{"messages": messages, "activeSessions": sessions, "messagesByStatus": by})
+	rows.Close()
+	bySession := make([]map[string]any, 0)
+	rows, err = s.db.QueryContext(r.Context(), "SELECT session_id,count(*) FROM messages WHERE "+where+" GROUP BY session_id ORDER BY count(*) DESC", args...)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	for rows.Next() {
+		var id string
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			rows.Close()
+			writeError(w, 500, err.Error())
+			return
+		}
+		bySession = append(bySession, map[string]any{"session_id": id, "count": n})
+	}
+	rows.Close()
+	write(w, 200, map[string]any{"totalMessages": total, "successCount": success, "failedCount": failed, "successRate": math.Round(rate*100) / 100, "todayMessages": today, "activeSessions": active, "dailyBreakdown": daily, "bySession": bySession})
 }
 func (s *Server) queueStats(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.QueryContext(r.Context(), `SELECT status,count(*) FROM queue_jobs GROUP BY status`)
@@ -602,22 +709,96 @@ func (s *Server) queueStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
-	counts := map[string]int{}
+	counts := map[string]int{"waiting": 0, "active": 0, "completed": 0, "failed": 0, "delayed": 0}
 	for rows.Next() {
 		var status string
 		var n int
 		_ = rows.Scan(&status, &n)
-		counts[status] = n
+		if status == "retrying" {
+			counts["delayed"] += n
+		} else {
+			counts[status] = n
+		}
 	}
-	write(w, 200, map[string]any{"counts": counts})
+	page, limit := 1, 20
+	if n, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && n > 0 {
+		page = n
+	}
+	if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && n > 0 && n <= 100 {
+		limit = n
+	}
+	where := []string{"1=1"}
+	args := []any{}
+	add := func(v any, clause string) {
+		args = append(args, v)
+		where = append(where, clause+"$"+strconv.Itoa(len(args)))
+	}
+	if v := strings.TrimSpace(r.URL.Query().Get("status")); v != "" {
+		add(v, "status=")
+	}
+	if v := strings.TrimSpace(r.URL.Query().Get("sessionId")); v != "" {
+		add(v, "COALESCE(data->>'sessionId',data->>'session_id','')=")
+	}
+	if v := strings.TrimSpace(r.URL.Query().Get("search")); v != "" {
+		add("%"+v+"%", "(job_id ILIKE ")
+		where[len(where)-1] += " OR COALESCE(data->>'to','') ILIKE $" + strconv.Itoa(len(args)) + ")"
+	}
+	filter := strings.Join(where, " AND ")
+	var total int
+	if err := s.db.QueryRowContext(r.Context(), "SELECT count(*) FROM queue_jobs WHERE "+filter, args...).Scan(&total); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	args = append(args, limit, (page-1)*limit)
+	rows, err = s.db.QueryContext(r.Context(), "SELECT id,job_id,queue_name,name,data,status,priority,attempts,max_attempts,error,processed_at,completed_at,created_at FROM queue_jobs WHERE "+filter+" ORDER BY created_at DESC LIMIT $"+strconv.Itoa(len(args)-1)+" OFFSET $"+strconv.Itoa(len(args)), args...)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	defer rows.Close()
+	jobs := make([]map[string]any, 0)
+	for rows.Next() {
+		var id, jobID, queueName, name, status string
+		var data []byte
+		var priority, attempts, maxAttempts int
+		var errorText sql.NullString
+		var processed, completed, created sql.NullTime
+		if err := rows.Scan(&id, &jobID, &queueName, &name, &data, &status, &priority, &attempts, &maxAttempts, &errorText, &processed, &completed, &created); err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+		var decoded any
+		_ = json.Unmarshal(data, &decoded)
+		date := func(v sql.NullTime) any {
+			if !v.Valid {
+				return nil
+			}
+			return v.Time
+		}
+		jobs = append(jobs, map[string]any{"id": id, "job_id": jobID, "queue_name": queueName, "name": name, "data": decoded, "status": status, "priority": priority, "attempts": attempts, "max_attempts": maxAttempts, "error": errorText.String, "processed_at": date(processed), "completed_at": date(completed), "created_at": date(created)})
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	write(w, 200, map[string]any{"counts": counts, "jobs": jobs, "total": total, "page": page, "limit": limit})
 }
 func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
-	var sessions, connected, queued, failed int
+	sessionID := strings.TrimSpace(r.URL.Query().Get("sessionId"))
+	filter := "1=1"
+	args := []any{}
+	if sessionID != "" {
+		args = append(args, sessionID)
+		filter = "session_id=$1"
+	}
+	var sessions, connected, queued, failed, today, apiUsage int
 	_ = s.db.QueryRowContext(r.Context(), `SELECT count(*) FROM sessions`).Scan(&sessions)
 	_ = s.db.QueryRowContext(r.Context(), `SELECT count(*) FROM sessions WHERE status='connected'`).Scan(&connected)
-	_ = s.db.QueryRowContext(r.Context(), `SELECT count(*) FROM messages WHERE status='queued'`).Scan(&queued)
-	_ = s.db.QueryRowContext(r.Context(), `SELECT count(*) FROM messages WHERE status='failed'`).Scan(&failed)
-	write(w, 200, map[string]any{"sessions": sessions, "activeSessions": connected, "queueSize": queued, "failedMessages": failed})
+	_ = s.db.QueryRowContext(r.Context(), `SELECT count(*) FROM messages WHERE `+filter+` AND status='queued'`, args...).Scan(&queued)
+	_ = s.db.QueryRowContext(r.Context(), `SELECT count(*) FROM messages WHERE `+filter+` AND status='failed'`, args...).Scan(&failed)
+	_ = s.db.QueryRowContext(r.Context(), `SELECT count(*) FROM messages WHERE `+filter+` AND created_at >= CURRENT_DATE`, args...).Scan(&today)
+	_ = s.db.QueryRowContext(r.Context(), `SELECT count(*) FROM audit_logs WHERE created_at >= CURRENT_DATE`).Scan(&apiUsage)
+	write(w, 200, map[string]any{"sessions": sessions, "activeSessions": connected, "messagesToday": today, "queueSize": queued, "failedMessages": failed, "apiUsage": apiUsage})
 }
 func (s *Server) createAPIKey(w http.ResponseWriter, r *http.Request) {
 	var body struct {

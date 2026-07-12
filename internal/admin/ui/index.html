@@ -445,9 +445,9 @@
             <!-- Active Sessions List -->
             <div class="bg-white rounded-xl border p-5">
               <h3 class="font-semibold text-gray-900 mb-4">Active Sessions</h3>
-              <div x-show="sessions.length===0" class="text-center py-10 text-gray-400 text-sm">No sessions.</div>
+              <div x-show="sessions.filter(x => x.status === 'connected').length===0" class="text-center py-10 text-gray-400 text-sm">No connected sessions.</div>
               <div class="space-y-3">
-                <template x-for="s in sessions" :key="s.id">
+                <template x-for="s in sessions.filter(x => x.status === 'connected')" :key="s.id">
                   <div class="flex items-center justify-between py-1 border-b border-gray-50 last:border-0 pb-3 last:pb-0">
                     <div class="flex items-center gap-3">
                       <div class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" :class="s.status==='connected'?'bg-green-50 text-green-600':'bg-gray-50 text-gray-400'">
@@ -766,7 +766,7 @@
       </div>
 
       <!-- ===== QUEUE + STATS + MONITORING (compact) ===== -->
-      <div x-show="page==='queue'"><div class="mb-6"><h1 class="text-xl md:text-2xl font-bold text-gray-900">Queue System</h1></div>
+      <div x-show="page==='queue'"><div class="mb-6"><h1 class="text-xl md:text-2xl font-bold text-gray-900">Queue System</h1><p class="text-sm text-gray-500 mt-0.5">Monitor queued jobs, processing status, retries, and delivery results.</p></div>
         <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-6">
           <div class="bg-white rounded-xl border p-4 text-center"><p class="text-2xl font-bold text-blue-600" x-text="queue.counts.waiting"></p><p class="text-xs text-gray-500 mt-1">Waiting</p></div>
           <div class="bg-white rounded-xl border p-4 text-center"><p class="text-2xl font-bold text-yellow-600" x-text="queue.counts.active"></p><p class="text-xs text-gray-500 mt-1">Active</p></div>
@@ -1088,7 +1088,7 @@
           </div>
         </div>
       </div>
-      <div x-show="page==='monitoring'"><div class="mb-6"><h1 class="text-xl font-bold text-gray-900">Monitoring</h1></div>
+      <div x-show="page==='monitoring'"><div class="mb-6"><h1 class="text-xl md:text-2xl font-bold text-gray-900">Monitoring</h1><p class="text-sm text-gray-500 mt-0.5">Monitor gateway and infrastructure health.</p></div>
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-4"><div class="bg-white rounded-xl border p-5 flex items-center gap-4"><div class="w-12 h-12 rounded-xl flex items-center justify-center" :class="mon.status==='healthy'?'bg-green-50':'bg-red-50'"><div class="w-3 h-3 rounded-full" :class="mon.status==='healthy'?'bg-green-500':'bg-red-500'"></div></div><div><p class="text-sm font-medium">System</p><p class="text-sm text-gray-500 capitalize" x-text="mon.status"></p></div></div><div class="bg-white rounded-xl border p-5 flex items-center gap-4"><div class="w-12 h-12 rounded-xl flex items-center justify-center" :class="mon.services?.postgres==='up'?'bg-green-50':'bg-red-50'"><div class="w-3 h-3 rounded-full" :class="mon.services?.postgres==='up'?'bg-green-500':'bg-red-500'"></div></div><div><p class="text-sm font-medium">PostgreSQL</p><p class="text-sm text-gray-500 capitalize" x-text="mon.services?.postgres"></p></div></div><div class="bg-white rounded-xl border p-5 flex items-center gap-4"><div class="w-12 h-12 rounded-xl flex items-center justify-center" :class="mon.services?.redis==='up'?'bg-green-50':'bg-red-50'"><div class="w-3 h-3 rounded-full" :class="mon.services?.redis==='up'?'bg-green-500':'bg-red-500'"></div></div><div><p class="text-sm font-medium">Redis</p><p class="text-sm text-gray-500 capitalize" x-text="mon.services?.redis"></p></div></div></div>
       </div>
 
