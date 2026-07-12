@@ -38,11 +38,15 @@ type Principal struct {
 	IsAPIKey                              bool
 }
 type APIKey struct {
-	ID, Name, KeyPrefix, SessionID string
-	AllowedIPs                     []string
-	RateLimit                      *int
-	IsActive                       bool
-	CreatedAt, UpdatedAt           time.Time
+	ID         string    `json:"id"`
+	Name       string    `json:"name"`
+	KeyPrefix  string    `json:"key_prefix"`
+	SessionID  string    `json:"session_id"`
+	AllowedIPs []string  `json:"allowed_ips"`
+	RateLimit  *int      `json:"rate_limit"`
+	IsActive   bool      `json:"is_active"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 func New(db *sql.DB, secret, refreshSecret string) *Service {

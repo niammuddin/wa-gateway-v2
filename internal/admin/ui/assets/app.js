@@ -325,8 +325,8 @@ function app(){return{
    return {delivered:'bg-green-50 text-green-700 ring-green-600/20',failed:'bg-red-50 text-red-700 ring-red-600/20',retrying:'bg-amber-50 text-amber-700 ring-amber-600/20',processing:'bg-blue-50 text-blue-700 ring-blue-600/20',queued:'bg-gray-50 text-gray-600 ring-gray-500/10',paused:'bg-gray-50 text-gray-500 ring-gray-500/10'}[status]||'bg-gray-50 text-gray-600 ring-gray-500/10';
  },
  formatPairingCode(code){return code?String(code).replace(/\s|-/g,'').replace(/^(.{4})(.*)$/, '$1-$2'):'-';},
- messageStatusClass(status){return {queued:'bg-amber-50 text-amber-800 ring-amber-600/20',sent:'bg-blue-50 text-blue-700 ring-blue-600/20',delivered:'bg-indigo-50 text-indigo-700 ring-indigo-600/20',read:'bg-green-50 text-green-700 ring-green-600/20',failed:'bg-red-50 text-red-700 ring-red-600/20'}[status]||'bg-gray-50 text-gray-600 ring-gray-500/10';},
- messageStatusDotClass(status){return {queued:'fill-amber-500',sent:'fill-blue-500',delivered:'fill-indigo-500',read:'fill-green-500',failed:'fill-red-500'}[status]||'fill-gray-400';},
+ messageStatusClass(status){return {queued:'bg-amber-50 text-amber-800 ring-amber-600/20',sent:'bg-blue-50 text-blue-700 ring-blue-600/20',delivered:'bg-cyan-50 text-cyan-700 ring-cyan-600/20',read:'bg-green-50 text-green-700 ring-green-600/20',failed:'bg-red-50 text-red-700 ring-red-600/20'}[status]||'bg-gray-50 text-gray-600 ring-gray-500/10';},
+ messageStatusDotClass(status){return {queued:'text-amber-500',sent:'text-blue-500',delivered:'text-cyan-500',read:'text-green-500',failed:'text-red-500'}[status]||'text-gray-400';},
  formatDateTime(value){return value?new Date(value).toLocaleString():'-';},
 
  async init(){
