@@ -22,6 +22,7 @@ type SessionManager struct {
 	container  *sqlstore.Container
 	store      store.Store
 	mu         sync.RWMutex
+	receiptMu  sync.Mutex
 	clients    map[string]*WhatsMeowClient
 	dispatcher EventDispatcher
 }
@@ -73,22 +74,7 @@ func (m *SessionManager) Create(ctx context.Context, sessionID, method, phone st
 		case *events.LoggedOut:
 			_ = m.store.UpdateSession(context.Background(), sessionID, "logged_out", "", "", phone)
 		case *events.Receipt:
-			status := ""
-			switch v.Type {
-			case events.ReceiptTypeDelivered:
-				status = "delivered"
-			case events.ReceiptTypeRead:
-				status = "read"
-			}
-			if status != "" {
-				for _, id := range v.MessageIDs {
-					waID := string(id)
-					if msg, ok, _ := m.store.GetMessageByWAID(context.Background(), sessionID, waID); ok && m.dispatcher != nil {
-						_ = m.dispatcher.Dispatch(context.Background(), "message."+status, map[string]any{"messageId": msg.ID, "sessionId": sessionID, "to": msg.To, "waMessageId": waID, "referenceId": msg.ReferenceID, "sourceType": msg.SourceType, "sourceId": msg.SourceID, "timestamp": v.Timestamp.UTC().Format(time.RFC3339)})
-					}
-					_ = m.store.UpdateMessageReceipt(context.Background(), sessionID, waID, status, v.Timestamp)
-				}
-			}
+			m.handleReceipt(sessionID, v)
 		}
 	})
 	if !client.IsLoggedIn() {
@@ -176,22 +162,7 @@ func (m *SessionManager) Load(ctx context.Context) error {
 			case *events.PairSuccess:
 				_ = m.store.SetSessionIdentity(context.Background(), session.SessionID, v.ID.String(), v.ID.User)
 			case *events.Receipt:
-				status := ""
-				switch v.Type {
-				case events.ReceiptTypeDelivered:
-					status = "delivered"
-				case events.ReceiptTypeRead:
-					status = "read"
-				}
-				if status != "" {
-					for _, id := range v.MessageIDs {
-						waID := string(id)
-						if msg, ok, _ := m.store.GetMessageByWAID(context.Background(), session.SessionID, waID); ok && m.dispatcher != nil {
-							_ = m.dispatcher.Dispatch(context.Background(), "message."+status, map[string]any{"messageId": msg.ID, "sessionId": session.SessionID, "to": msg.To, "waMessageId": waID, "referenceId": msg.ReferenceID, "sourceType": msg.SourceType, "sourceId": msg.SourceID, "timestamp": v.Timestamp.UTC().Format(time.RFC3339)})
-						}
-						_ = m.store.UpdateMessageReceipt(context.Background(), session.SessionID, waID, status, v.Timestamp)
-					}
-				}
+				m.handleReceipt(session.SessionID, v)
 			}
 		})
 		m.mu.Lock()
@@ -204,6 +175,40 @@ func (m *SessionManager) Load(ctx context.Context) error {
 		}(client, session.SessionID)
 	}
 	return nil
+}
+
+// handleReceipt makes WhatsApp receipts idempotent before publishing them to
+// SSE/webhook consumers. WhatsApp may deliver the same receipt more than once.
+func (m *SessionManager) handleReceipt(sessionID string, receipt *events.Receipt) {
+	status := ""
+	switch receipt.Type {
+	case events.ReceiptTypeDelivered:
+		status = "delivered"
+	case events.ReceiptTypeRead:
+		status = "read"
+	default:
+		return
+	}
+
+	m.receiptMu.Lock()
+	defer m.receiptMu.Unlock()
+	for _, id := range receipt.MessageIDs {
+		waID := string(id)
+		msg, ok, err := m.store.GetMessageByWAID(context.Background(), sessionID, waID)
+		if err != nil || !ok || (status == "delivered" && msg.Status != "sent") || (status == "read" && msg.Status != "sent" && msg.Status != "delivered") {
+			continue
+		}
+		if err := m.store.UpdateMessageReceipt(context.Background(), sessionID, waID, status, receipt.Timestamp); err != nil {
+			continue
+		}
+		if m.dispatcher != nil {
+			_ = m.dispatcher.Dispatch(context.Background(), "message."+status, map[string]any{
+				"messageId": msg.ID, "sessionId": sessionID, "to": msg.To, "waMessageId": waID,
+				"referenceId": msg.ReferenceID, "sourceType": msg.SourceType, "sourceId": msg.SourceID,
+				"timestamp": receipt.Timestamp.UTC().Format(time.RFC3339),
+			})
+		}
+	}
 }
 
 func (m *SessionManager) Reconnect(ctx context.Context, sessionID string) error {
