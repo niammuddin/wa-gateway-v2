@@ -135,3 +135,15 @@ paths:
   /api/v1/stats: {get: {responses: {'200': {description: Statistics}}}}
   /api/v1/monitoring: {get: {responses: {'200': {description: Monitoring}}}}
   /api/v1/dashboard: {get: {responses: {'200': {description: Dashboard}}}}
+  /api/v1/events:
+    get:
+      summary: Stream gateway events
+      description: Server-Sent Events stream for authenticated admin updates.
+      responses:
+        '200':
+          description: Event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '401': {description: Authentication required}
