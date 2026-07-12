@@ -6,7 +6,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/niammuddin/wa-gateway-v2/internal/auth"
 	"github.com/niammuddin/wa-gateway-v2/internal/store"
 	"log/slog"
 )
@@ -99,6 +102,91 @@ func TestAuthSessionWithoutCookieReturnsNoContent(t *testing.T) {
 	app.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/auth/session", nil))
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("auth session status = %d, want %d", response.Code, http.StatusNoContent)
+	}
+}
+
+func TestPublicContractRoutes(t *testing.T) {
+	app := New(store.NewMemory(), slog.Default()).Handler()
+	tests := []struct {
+		name       string
+		method     string
+		path       string
+		wantStatus int
+	}{
+		{name: "health", method: http.MethodGet, path: "/health", wantStatus: http.StatusOK},
+		{name: "admin shell", method: http.MethodGet, path: "/admin", wantStatus: http.StatusOK},
+		{name: "auth session without cookie", method: http.MethodGet, path: "/api/v1/auth/session", wantStatus: http.StatusNoContent},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			app.ServeHTTP(response, httptest.NewRequest(tt.method, tt.path, nil))
+			if response.Code != tt.wantStatus {
+				t.Fatalf("%s %s status = %d, want %d", tt.method, tt.path, response.Code, tt.wantStatus)
+			}
+		})
+	}
+}
+
+func TestProtectedRoutesRequireAuthentication(t *testing.T) {
+	app := NewWithDependencies(store.NewMemory(), nil, auth.New(nil, "access-secret", "refresh-secret"), slog.Default()).Handler()
+	paths := []string{
+		"/api/v1/sessions/",
+		"/api/v1/messages/",
+		"/api/v1/api-keys/",
+		"/api/v1/templates/",
+		"/api/v1/webhooks/",
+		"/api/v1/stats",
+		"/api/v1/queue",
+		"/api/v1/monitoring",
+		"/api/v1/dashboard",
+		"/api/v1/events",
+	}
+
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			app.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+			if response.Code != http.StatusUnauthorized {
+				t.Fatalf("GET %s status = %d, want %d", path, response.Code, http.StatusUnauthorized)
+			}
+		})
+	}
+}
+
+func TestBearerAuthenticationContract(t *testing.T) {
+	service := auth.New(nil, "access-secret", "refresh-secret")
+	app := NewWithDependencies(store.NewMemory(), nil, service, slog.Default()).Handler()
+
+	for _, token := range []string{"not-a-jwt", "Bearer", "Bearer not-a-jwt"} {
+		response := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/", nil)
+		request.Header.Set("Authorization", token)
+		app.ServeHTTP(response, request)
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("authorization %q status = %d, want %d", token, response.Code, http.StatusUnauthorized)
+		}
+	}
+
+	now := time.Now()
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub":      "user-1",
+		"username": "admin",
+		"exp":      now.Add(time.Minute).Unix(),
+		"iat":      now.Unix(),
+		"iss":      "wa-gateway",
+	})
+	signed, err := token.SignedString([]byte("access-secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/", nil)
+	request.Header.Set("Authorization", "Bearer "+signed)
+	app.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("valid bearer status = %d, want %d", response.Code, http.StatusOK)
 	}
 }
 
