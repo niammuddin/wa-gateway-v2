@@ -14,5 +14,5 @@ COPY migrations /app/migrations
 RUN mkdir -p /app/auth_sessions && chown -R gateway:gateway /app
 USER gateway
 EXPOSE 3000
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD wget -q -O /dev/null http://127.0.0.1:3000/health || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD wget -q -O /dev/null http://127.0.0.1:3000/ || exit 1
 ENTRYPOINT ["/app/wa-gateway"]

@@ -35,7 +35,7 @@ Use different values for `JWT_SECRET`, `JWT_REFRESH_SECRET`, and
 ```bash
 docker compose --env-file .env.production -f docker-compose.production.yml up -d --build
 docker compose --env-file .env.production -f docker-compose.production.yml ps
-curl -fsS http://127.0.0.1:3000/health
+curl -fsS http://127.0.0.1:3000/
 ```
 
 The gateway runs database migrations on startup. The first WhatsApp QR or
@@ -78,7 +78,7 @@ Store backups outside the server and periodically test restoration.
 
 ## 7. Operations checklist
 
-- Confirm `/health` returns `{"status":"ok"}`.
+- Confirm `/` returns the landing page.
 - Confirm `/api/v1/monitoring` reports PostgreSQL and Redis as `up`.
 - Complete a QR/pairing login and verify it survives a gateway restart.
 - Send a test message and verify sent, delivered, read, and failed paths.

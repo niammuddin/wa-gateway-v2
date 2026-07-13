@@ -8,6 +8,8 @@
 - Use a persistent PostgreSQL database and Redis volume.
 - Mount `/app/auth_sessions` persistently; WhatsApp sessions depend on it.
 - Put the gateway behind TLS and restrict PostgreSQL/Redis ports from public access.
+- Use `/` as the unauthenticated container liveness check; use authenticated
+  `/api/v1/monitoring` for PostgreSQL and Redis health.
 
 ## Operational checks
 
