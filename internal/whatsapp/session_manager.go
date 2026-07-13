@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,6 +27,7 @@ type SessionManager struct {
 	receiptMu  sync.Mutex
 	clients    map[string]*WhatsMeowClient
 	dispatcher EventDispatcher
+	logger     *slog.Logger
 }
 
 func (m *SessionManager) SetDispatcher(d EventDispatcher) { m.dispatcher = d }
@@ -34,7 +37,7 @@ func NewSessionManager(ctx context.Context, databaseURL string, dataStore store.
 	if err != nil {
 		return nil, err
 	}
-	return &SessionManager{container: container, store: dataStore, clients: map[string]*WhatsMeowClient{}}, nil
+	return &SessionManager{container: container, store: dataStore, clients: map[string]*WhatsMeowClient{}, logger: slog.Default()}, nil
 }
 
 func (m *SessionManager) Create(ctx context.Context, sessionID, method, phone string) error {
@@ -55,6 +58,7 @@ func (m *SessionManager) Create(ctx context.Context, sessionID, method, phone st
 		case *events.PairSuccess:
 			_ = m.store.SetSessionIdentity(context.Background(), sessionID, v.ID.String(), v.ID.User)
 			_ = m.store.UpdateSession(context.Background(), sessionID, "connecting", "", "", v.ID.User)
+			m.dispatchSessionStatus(sessionID, "connecting", v.ID.User)
 		case *events.Connected:
 			connectedPhone := phone
 			if connectedPhone == "" {
@@ -63,16 +67,13 @@ func (m *SessionManager) Create(ctx context.Context, sessionID, method, phone st
 				}
 			}
 			_ = m.store.UpdateSession(context.Background(), sessionID, "connected", "", "", connectedPhone)
-			if m.dispatcher != nil {
-				_ = m.dispatcher.Dispatch(context.Background(), "session.connected", map[string]any{"sessionId": sessionID, "phoneNumber": connectedPhone})
-			}
+			m.dispatchSessionStatus(sessionID, "connected", connectedPhone)
 		case *events.Disconnected:
 			_ = m.store.UpdateSession(context.Background(), sessionID, "disconnected", "", "", phone)
-			if m.dispatcher != nil {
-				_ = m.dispatcher.Dispatch(context.Background(), "session.disconnected", map[string]any{"sessionId": sessionID, "phoneNumber": phone})
-			}
+			m.dispatchSessionStatus(sessionID, "disconnected", phone)
 		case *events.LoggedOut:
 			_ = m.store.UpdateSession(context.Background(), sessionID, "logged_out", "", "", phone)
+			m.dispatchSessionStatus(sessionID, "logged_out", phone)
 		case *events.Receipt:
 			m.handleReceipt(sessionID, v)
 		}
@@ -84,6 +85,14 @@ func (m *SessionManager) Create(ctx context.Context, sessionID, method, phone st
 		}
 		go func() {
 			for item := range qr {
+				if !m.isCurrentClient(sessionID, client) {
+					return
+				}
+				if item.Event == "timeout" {
+					_ = m.store.UpdateSession(context.Background(), sessionID, "failed", "", "", phone)
+					m.dispatchSessionStatus(sessionID, "failed", phone)
+					continue
+				}
 				if item.Event == "code" {
 					if method == "pairing" && phone != "" {
 						// The first QR item signals that the websocket is ready, but
@@ -96,21 +105,40 @@ func (m *SessionManager) Create(ctx context.Context, sessionID, method, phone st
 							if pairErr == nil {
 								break
 							}
-							time.Sleep(time.Second)
+							m.logger.Warn("whatsapp pairing code request failed", "session_id", sessionID, "attempt", attempt+1, "error", pairErr)
+							if isPairingRateLimited(pairErr) {
+								break
+							}
+							time.Sleep(time.Duration(attempt+1) * time.Second)
 						}
 						if pairErr == nil {
+							if !m.isCurrentClient(sessionID, client) {
+								return
+							}
 							_ = m.store.UpdateSession(context.Background(), sessionID, "connecting", "", pairingCode, phone)
+							expires := time.Now().UTC().Add(160 * time.Second)
+							_ = m.store.SetSessionQRExpiry(context.Background(), sessionID, &expires)
+							m.dispatchSessionStatus(sessionID, "connecting", phone)
 						} else {
+							if !m.isCurrentClient(sessionID, client) {
+								return
+							}
 							_ = m.store.UpdateSession(context.Background(), sessionID, "failed", "", "", phone)
+							m.logger.Error("whatsapp pairing failed", "session_id", sessionID, "error", pairErr)
+							m.dispatchSessionStatus(sessionID, "failed", phone)
 						}
 					} else {
 						qrValue := item.Code
 						if png, err := qrcode.Encode(item.Code, qrcode.Medium, 256); err == nil {
 							qrValue = "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
 						}
+						if !m.isCurrentClient(sessionID, client) {
+							return
+						}
 						_ = m.store.UpdateSession(context.Background(), sessionID, "connecting", qrValue, "", phone)
 						expires := time.Now().UTC().Add(item.Timeout)
 						_ = m.store.SetSessionQRExpiry(context.Background(), sessionID, &expires)
+						m.dispatchSessionStatus(sessionID, "connecting", phone)
 					}
 				}
 			}
@@ -118,7 +146,12 @@ func (m *SessionManager) Create(ctx context.Context, sessionID, method, phone st
 	}
 	go func() {
 		if err := client.Connect(connectionCtx); err != nil {
+			if !m.isCurrentClient(sessionID, client) {
+				return
+			}
 			_ = m.store.UpdateSession(context.Background(), sessionID, "failed", "", "", phone)
+			m.logger.Error("whatsapp session connect failed", "session_id", sessionID, "error", err)
+			m.dispatchSessionStatus(sessionID, "failed", phone)
 		}
 	}()
 	return nil
@@ -149,18 +182,16 @@ func (m *SessionManager) Load(ctx context.Context) error {
 			switch v := evt.(type) {
 			case *events.Connected:
 				_ = m.store.UpdateSession(context.Background(), session.SessionID, "connected", "", "", session.PhoneNumber)
-				if m.dispatcher != nil {
-					_ = m.dispatcher.Dispatch(context.Background(), "session.connected", map[string]any{"sessionId": session.SessionID, "phoneNumber": session.PhoneNumber})
-				}
+				m.dispatchSessionStatus(session.SessionID, "connected", session.PhoneNumber)
 			case *events.Disconnected:
 				_ = m.store.UpdateSession(context.Background(), session.SessionID, "disconnected", "", "", session.PhoneNumber)
-				if m.dispatcher != nil {
-					_ = m.dispatcher.Dispatch(context.Background(), "session.disconnected", map[string]any{"sessionId": session.SessionID, "phoneNumber": session.PhoneNumber})
-				}
+				m.dispatchSessionStatus(session.SessionID, "disconnected", session.PhoneNumber)
 			case *events.LoggedOut:
 				_ = m.store.UpdateSession(context.Background(), session.SessionID, "logged_out", "", "", session.PhoneNumber)
+				m.dispatchSessionStatus(session.SessionID, "logged_out", session.PhoneNumber)
 			case *events.PairSuccess:
 				_ = m.store.SetSessionIdentity(context.Background(), session.SessionID, v.ID.String(), v.ID.User)
+				m.dispatchSessionStatus(session.SessionID, "connecting", v.ID.User)
 			case *events.Receipt:
 				m.handleReceipt(session.SessionID, v)
 			}
@@ -170,7 +201,11 @@ func (m *SessionManager) Load(ctx context.Context) error {
 		m.mu.Unlock()
 		go func(c *WhatsMeowClient, id string) {
 			if err := c.Connect(context.Background()); err != nil {
+				if !m.isCurrentClient(id, c) {
+					return
+				}
 				_ = m.store.UpdateSession(context.Background(), id, "failed", "", "", session.PhoneNumber)
+				m.dispatchSessionStatus(id, "failed", session.PhoneNumber)
 			}
 		}(client, session.SessionID)
 	}
@@ -213,6 +248,14 @@ func (m *SessionManager) handleReceipt(sessionID string, receipt *events.Receipt
 
 func (m *SessionManager) Reconnect(ctx context.Context, sessionID string) error {
 	c, ok := m.get(sessionID)
+	if ok && !c.IsLoggedIn() {
+		_ = c.Disconnect()
+		m.mu.Lock()
+		delete(m.clients, sessionID)
+		m.mu.Unlock()
+		c = nil
+		ok = false
+	}
 	if !ok {
 		// Logout removes the authenticated device. Recreate a fresh client so
 		// reconnect starts a new QR/pairing flow instead of failing on a stale
@@ -231,10 +274,38 @@ func (m *SessionManager) Reconnect(ctx context.Context, sessionID string) error 
 	// outlive that request just like initial session creation.
 	go func() {
 		if err := c.Connect(context.Background()); err != nil {
+			if !m.isCurrentClient(sessionID, c) {
+				return
+			}
 			_ = m.store.UpdateSession(context.Background(), sessionID, "failed", "", "", "")
+			m.dispatchSessionStatus(sessionID, "failed", "")
 		}
 	}()
 	return nil
+}
+
+func isPairingRateLimited(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "rate-overlimit") || strings.Contains(message, "status 429")
+}
+
+func (m *SessionManager) dispatchSessionStatus(sessionID, status, phone string) {
+	if m.dispatcher == nil {
+		return
+	}
+	payload := map[string]any{"sessionId": sessionID, "status": status, "phoneNumber": phone}
+	if session, ok, err := m.store.GetSession(context.Background(), sessionID); err == nil && ok {
+		payload["qrCode"] = session.QRCode
+		payload["pairingCode"] = session.PairingCode
+		payload["qrExpiresAt"] = session.QRExpiresAt
+		if session.PhoneNumber != "" {
+			payload["phoneNumber"] = session.PhoneNumber
+		}
+	}
+	_ = m.dispatcher.Dispatch(context.Background(), "session."+status, payload)
 }
 func (m *SessionManager) Disconnect(sessionID string) error {
 	c, ok := m.get(sessionID)
@@ -271,6 +342,11 @@ func (m *SessionManager) get(id string) (*WhatsMeowClient, bool) {
 	defer m.mu.RUnlock()
 	c, ok := m.clients[id]
 	return c, ok
+}
+
+func (m *SessionManager) isCurrentClient(id string, candidate *WhatsMeowClient) bool {
+	current, ok := m.get(id)
+	return ok && current == candidate
 }
 func (m *SessionManager) Close() {
 	m.mu.Lock()

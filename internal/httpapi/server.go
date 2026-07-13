@@ -919,9 +919,12 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.dispatchSessionEvent("created", session.SessionID, body.PhoneNumber)
+	s.dispatchSessionEvent("connecting", session.SessionID, body.PhoneNumber)
 	if s.whatsapp != nil {
 		if err := s.whatsapp.Create(r.Context(), body.SessionID, body.Method, body.PhoneNumber); err != nil {
 			_ = s.store.UpdateSession(r.Context(), body.SessionID, "failed", "", "", "")
+			s.dispatchSessionEvent("failed", body.SessionID, body.PhoneNumber)
 			writeError(w, http.StatusBadGateway, err.Error())
 			return
 		}
@@ -975,6 +978,9 @@ func (s *Server) sessionAction(status string) http.HandlerFunc {
 				return
 			}
 		}
+		if status == "reconnecting" || status == "logged_out" {
+			s.dispatchSessionEvent(status, id, v.PhoneNumber)
+		}
 		if status == "logged_out" {
 			v.Status = "disconnected"
 			v.QRCode, v.PairingCode, v.QRExpiresAt = "", "", nil
@@ -988,6 +994,15 @@ func (s *Server) sessionAction(status string) http.HandlerFunc {
 		}
 		write(w, http.StatusOK, v)
 	}
+}
+
+func (s *Server) dispatchSessionEvent(status, sessionID, phone string) {
+	if s.events == nil {
+		return
+	}
+	_ = s.events.Dispatch(context.Background(), "session."+status, map[string]any{
+		"sessionId": sessionID, "status": status, "phoneNumber": phone,
+	})
 }
 
 func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
@@ -1014,6 +1029,7 @@ func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "Session not found")
 		return
 	}
+	s.dispatchSessionEvent("deleted", id, "")
 	write(w, 200, map[string]string{"message": "Session deleted"})
 }
 func (s *Server) updateThrottle(w http.ResponseWriter, r *http.Request) {

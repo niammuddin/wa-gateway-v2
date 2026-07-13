@@ -118,6 +118,8 @@ type Dispatcher interface {
 }
 type Throttle interface {
 	Wait(context.Context, string) error
+	RecordFailure(context.Context, string) error
+	RecordSuccess(context.Context, string) error
 }
 type Worker struct {
 	server *asynq.Server
@@ -145,8 +147,19 @@ func NewWorker(raw string, dataStore MessageStore, lookup func(string) (Sender, 
 				return err
 			}
 		}
+		recordFailure := func() {
+			if limiter != nil {
+				_ = limiter.RecordFailure(context.Background(), job.SessionID)
+			}
+		}
+		recordSuccess := func() {
+			if limiter != nil {
+				_ = limiter.RecordSuccess(context.Background(), job.SessionID)
+			}
+		}
 		sender, ok := lookup(job.SessionID)
 		if !ok {
+			recordFailure()
 			_ = dataStore.UpdateMessageStatus(context.Background(), job.MessageID, "failed", "", "session client unavailable")
 			_ = dataStore.UpdateQueueJob(context.Background(), job.MessageID, "failed", "session client unavailable")
 			if dispatcher != nil {
@@ -174,6 +187,7 @@ func NewWorker(raw string, dataStore MessageStore, lookup func(string) (Sender, 
 			err = fmt.Errorf("unsupported message type %s", job.Type)
 		}
 		if err != nil {
+			recordFailure()
 			_ = dataStore.UpdateMessageStatus(context.Background(), job.MessageID, "failed", "", err.Error())
 			_ = dataStore.UpdateQueueJob(context.Background(), job.MessageID, "failed", err.Error())
 			if dispatcher != nil {
@@ -189,6 +203,7 @@ func NewWorker(raw string, dataStore MessageStore, lookup func(string) (Sender, 
 		if err := dataStore.UpdateMessageStatus(ctx, job.MessageID, "sent", waID, ""); err != nil {
 			return err
 		}
+		recordSuccess()
 		_ = dataStore.UpdateQueueJob(context.Background(), job.MessageID, "completed", "")
 		if dispatcher != nil {
 			_ = dispatcher.Dispatch(ctx, "message.sent", map[string]any{"messageId": job.MessageID, "sessionId": job.SessionID, "to": job.To, "waMessageId": waID})

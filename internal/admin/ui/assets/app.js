@@ -1,5 +1,5 @@
 function app(){return{
- token:'',refreshPromise:null,bootstrapPromise:null,refreshTimer:null,pollTimer:null,sessionPollTimer:null,qrTimer:null,qrTick:0,username:'',password:'',error:'',
+ token:'',refreshPromise:null,bootstrapPromise:null,refreshTimer:null,pollTimer:null,sessionPollTimer:null,qrTimer:null,qrTick:0,username:'',password:'',error:'',refreshing:false,
  page:'dashboard',sidebarOpen:false,
  sessions:[],messages:[],apiKeys:[],templates:[],webhooks:[],webhookDeliveries:[],webhookDeliveryStatus:'',webhookDeliveryWebhook:'',webhookDeliverySearch:'',webhookDeliveryPage:1,webhookDeliveryLimit:20,webhookDeliveryTotal:0,webhookDeliveryStats:{total:0,delivered:0,failed:0,retrying:0,queued:0},
  dashboard:{activeSessions:0,messagesToday:0,failedMessages:0,queueSize:0,apiUsage:0},
@@ -166,7 +166,7 @@ function app(){return{
           if (res) {
             this.msg('Pesan berhasil masuk antrean queue');
             this.modal.show = false;
-            await this.loadAll();
+            await this.loadMessages();
           }
         } catch (err) { /* error shown by api() */ }
       },
@@ -228,7 +228,7 @@ function app(){return{
    const{form}=this;if(!form.sessionId.trim()){this.msg('ID wajib diisi','error');return}
    if(form.method==='pairing'&&!form.phoneNumber.trim()){this.msg('Phone wajib','error');return}
    const res=await this.api('/sessions',{method:'POST',body:JSON.stringify({sessionId:form.sessionId,method:form.method,phoneNumber:form.phoneNumber||undefined})});
-   if(res){this.sessions.unshift(res);this.msg('Dibuat');this.watchSession(form.sessionId)}
+   if(res){this.sessions.unshift(res);this.msg('Dibuat')}
  },
  async saveSessionThrottle(){
    const{form}=this;
@@ -250,7 +250,7 @@ function app(){return{
    };
    this.sessionPollTimer=setTimeout(poll,250);
  },
- async reconnectSession(sid){const r=await this.api('/sessions/'+encodeURIComponent(sid)+'/reconnect',{method:'POST'});if(!r)return;this.msg('Reconnecting...');this.watchSession(sid)},
+ async reconnectSession(sid){const r=await this.api('/sessions/'+encodeURIComponent(sid)+'/reconnect',{method:'POST'});if(!r)return;this.msg('Reconnecting...')},
 
  async saveApiKey(){
    const{form}=this;if(!form.name.trim()){this.msg('Nama wajib','error');return}
@@ -344,15 +344,52 @@ function app(){return{
  connectEvents(){
    if(this.eventsAbort) this.eventsAbort.abort();
    const controller=new AbortController(); this.eventsAbort=controller;
-   const eventNames=new Set(['session.connected','session.disconnected','message.sent','message.delivered','message.read','message.failed']);
+   const eventNames=new Set(['session.created','session.connecting','session.reconnecting','session.connected','session.disconnected','session.failed','session.logged_out','session.deleted','message.sent','message.delivered','message.read','message.failed']);
    (async()=>{ try {
      const res=await fetch('/api/v1/events',{headers:{Authorization:'Bearer '+this.token},signal:controller.signal});
      if(!res.ok) throw new Error('SSE '+res.status);
      const reader=res.body.getReader(), decoder=new TextDecoder(); let buffer='';
      while(true){ const {value,done}=await reader.read(); if(done) break; buffer+=decoder.decode(value,{stream:true}); const chunks=buffer.split('\n\n'); buffer=chunks.pop()||'';
-       for(const chunk of chunks){ const name=(chunk.match(/^event: ?(.+)$/m)||[])[1]||'message'; if(name==='message'||eventNames.has(name)) await this.loadAll(); }
+       for(const chunk of chunks){
+         const eventMatch=chunk.match(/^event: ?(.+)$/m);
+         if(!eventMatch) continue;
+         const name=eventMatch[1].trim();
+         const dataMatch=chunk.match(/^data: ?(.+)$/m);
+         let payload={};
+         if(dataMatch){try{payload=JSON.parse(dataMatch[1])||{}}catch{payload={}}}
+         if(eventNames.has(name)) await this.refreshForEvent(name,payload);
+       }
      }
    } catch(err){ if(!controller.signal.aborted) setTimeout(()=>{if(this.token) this.connectEvents()},3000); } })();
+ },
+ async refreshForEvent(name,payload={}){
+   if(name.startsWith('message.')){
+     if(this.page==='messages') return this.loadMessages();
+     if(this.page==='dashboard') return this.loadPageData('dashboard',true);
+     if(this.page==='stats') return this.loadPageData('stats',true);
+     return;
+   }
+   if(name.startsWith('session.')){
+     if(this.page==='sessions'||this.page==='messages'){
+       if(name==='session.deleted'){
+         this.sessions=this.sessions.filter(session=>session.session_id!==payload.sessionId);
+         return;
+       }
+       if(payload.sessionId && payload.status){
+         const index=this.sessions.findIndex(session=>session.session_id===payload.sessionId);
+         if(index>=0){
+           const current=this.sessions[index];
+           const scanned=current.method!=='pairing'&&!!current.qr_code&&!payload.qrCode&&payload.status==='connecting';
+           this.sessions[index]={...current,status:payload.status,phone_number:payload.phoneNumber||current.phone_number,qr_code:payload.qrCode||'',pairing_code:payload.pairingCode||'',qr_expires_at:payload.qrExpiresAt||null,qr_scanned:payload.status==='reconnecting'||payload.qrCode?false:(current.qr_scanned||scanned)};
+           return;
+         }
+       }
+       const sessions=await this.api('/sessions');
+       if(sessions)this.sessions=sessions;
+       return;
+     }
+     if(this.page==='dashboard'||this.page==='stats') return this.loadPageData(this.page,true);
+   }
  },
  async setPage(pageName){
    this.page=pageName;
@@ -446,6 +483,11 @@ function app(){return{
    }catch{}
  },
  async loadAll(){return this.loadPageData(this.page,true)},
+ async manualRefresh(){
+   if(this.refreshing)return;
+   this.refreshing=true;
+   try{await this.loadAll()}finally{this.refreshing=false}
+ },
  queuePageItems(){
    const totalPages=Math.max(Math.ceil((this.queue.total||0)/(this.queue.limit||20)),1);
    const current=this.queue.page||1;
