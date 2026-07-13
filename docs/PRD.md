@@ -1,7 +1,7 @@
 # Product Requirements Document — WA Gateway Go
 
 **Status:** Draft v1.0  
-**Source of truth:** `https://github.com/niammuddin/wa-gateway`  
+**Source of truth:** [github.com/niammuddin/wa-gateway](https://github.com/niammuddin/wa-gateway)
 **Target implementation:** Go + whatsmeow
 
 ## 1. Ringkasan

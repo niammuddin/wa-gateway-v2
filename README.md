@@ -2,7 +2,7 @@
 
 Daily development workflow: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
-Port Go dari `https://github.com/niammuddin/wa-gateway`.
+Port Go dari [github.com/niammuddin/wa-gateway](https://github.com/niammuddin/wa-gateway).
 
 Dokumen desain:
 
