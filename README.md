@@ -11,6 +11,7 @@ Dokumen desain:
 - [Porting plan](docs/PORTING_PLAN.md)
 - [Porting status](docs/PORTING_STATUS.md)
 - [OpenAPI](docs/OPENAPI.yaml)
+- [Production deployment](docs/DEPLOYMENT.md)
 
 Status saat ini: core API, PostgreSQL migration, Redis/Asynq worker, auth, API
 keys, templates, webhooks, session lifecycle, QR/pairing, text/media sending,
@@ -18,7 +19,8 @@ receipts, admin shell, and OpenAPI contract are implemented. E2E image and
 document sends have been verified with a linked WhatsApp session. Receipt
 `delivered/read` still depends on the recipient device generating the event.
 
-Production deployment checklist tersedia di
+Production deployment guide tersedia di
+[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md), dengan checklist tambahan di
 [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md).
 
 Jalankan setelah Go tersedia:
