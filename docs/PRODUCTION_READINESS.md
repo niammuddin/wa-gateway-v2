@@ -11,7 +11,6 @@
 
 ## Operational checks
 
-- `GET /health` returns `200`.
 - Session status is `connected` before sending.
 - Contacts that have never chatted with the account may trigger WhatsApp error
   `463`; the recipient must initiate or establish the conversation first.

@@ -86,7 +86,6 @@ components:
         pauseDurationMs: {type: integer, minimum: 0}
 security: [{bearerAuth: []}]
 paths:
-  /health: {get: {security: [], responses: {'200': {description: OK}}}}
   /admin: {get: {security: [], responses: {'200': {description: Admin shell}}}}
   /api/v1/auth/login:
     post:

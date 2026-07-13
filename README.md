@@ -25,8 +25,10 @@ Jalankan setelah Go tersedia:
 
 ```bash
 go run ./cmd/gateway
-curl http://localhost:3000/health
 ```
+
+Buka `http://localhost:3000/` untuk landing page atau `http://localhost:3000/admin`
+untuk admin panel.
 
 Dengan Docker:
 

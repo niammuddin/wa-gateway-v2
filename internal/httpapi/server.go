@@ -70,9 +70,6 @@ func (s *Server) SetEventBroker(b *events.Broker) {
 func (s *Server) Handler() http.Handler {
 	r := chi.NewRouter()
 	r.Get("/", landing.Handler)
-	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
-		write(w, http.StatusOK, map[string]string{"status": "ok"})
-	})
 	r.Get("/admin", admin.Handler)
 	r.Get("/admin/*", admin.Handler)
 	r.Route("/api/v1", func(r chi.Router) {
