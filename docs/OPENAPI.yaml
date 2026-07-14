@@ -58,6 +58,8 @@ components:
         templateId: {type: string, format: uuid}
         variables: {type: object, additionalProperties: {type: string}}
         referenceId: {type: string, maxLength: 255}
+        sourceType: {type: string, maxLength: 100}
+        sourceId: {type: string, maxLength: 255}
         priority: {type: integer, default: 0}
         delay: {type: integer, minimum: 0, description: Delay in milliseconds}
     QueuedMessage:

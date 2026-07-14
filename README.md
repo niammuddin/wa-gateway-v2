@@ -11,6 +11,7 @@ Dokumen desain:
 - [Porting plan](docs/PORTING_PLAN.md)
 - [Porting status](docs/PORTING_STATUS.md)
 - [OpenAPI](docs/OPENAPI.yaml)
+- [Billing integration](docs/BILLING_INTEGRATION.md)
 - [Production deployment](docs/DEPLOYMENT.md)
 
 Status saat ini: core API, PostgreSQL migration, Redis/Asynq worker, auth, API
