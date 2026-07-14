@@ -235,6 +235,14 @@ Content-Type: application/json
 ```
 
 Signature: `hex(HMAC-SHA256(raw_request_body, webhook_secret))`.
+
+### Koneksi callback IPv4/IPv6
+
+Dispatcher webhook menggunakan IPv4 secara default. Ini diperlukan pada server
+yang memiliki DNS IPv6 tetapi tidak memiliki default route IPv6, misalnya ketika
+endpoint billing berada di balik Cloudflare Proxy. Atur `WEBHOOK_HTTP_IP_VERSION`
+ke `6` hanya jika host gateway memang memiliki konektivitas IPv6; nilai lain
+selain `4` atau `6` membiarkan Go memilih address family.
 Validasi menggunakan raw body sebelum JSON diformat ulang dan gunakan
 perbandingan constant-time.
 

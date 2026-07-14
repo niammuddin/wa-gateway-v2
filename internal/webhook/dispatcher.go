@@ -8,8 +8,10 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -33,7 +35,31 @@ func (d *Dispatcher) Test(ctx context.Context, webhookID string) (string, error)
 }
 
 func New(db *sql.DB) *Dispatcher {
-	return &Dispatcher{db: db, client: &http.Client{Timeout: 10 * time.Second}, key: os.Getenv("WEBHOOK_ENCRYPTION_KEY")}
+	return &Dispatcher{db: db, client: newHTTPClient(), key: os.Getenv("WEBHOOK_ENCRYPTION_KEY")}
+}
+
+func newHTTPClient() *http.Client {
+	addressFamily := strings.TrimSpace(os.Getenv("WEBHOOK_HTTP_IP_VERSION"))
+	if addressFamily == "" {
+		addressFamily = "4"
+	}
+
+	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			if addressFamily == "4" {
+				network = "tcp4"
+			} else if addressFamily == "6" {
+				network = "tcp6"
+			}
+			return dialer.DialContext(ctx, network, address)
+		},
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 15 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+	return &http.Client{Transport: transport, Timeout: 20 * time.Second}
 }
 
 func (d *Dispatcher) Dispatch(ctx context.Context, event string, payload map[string]any) error {
